@@ -1,5 +1,5 @@
 name: 01 - CI
-# Trigger CI/CD pipeline for Task 8.1P - Mihir
+# Updated Trigger CI/CD pipeline for Task 8.1P - Mihir
 on:
   # Trigger the workflow on push to main branch
   push:
