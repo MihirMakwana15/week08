@@ -1,14 +1,14 @@
 location            = "Australia East"
-resource_group_name = "koalatech-week06-rg"
+resource_group_name = "koalatech-rg"
 
 # Replace with a unique name for your Azure Container Registry 
-acr_name             = "Mihir225113768"
+acr_name             = "Mihirkube225113768"
 
 # Replace with a unique name for your Azure Storage Account
 storage_account_name = "mihirstorage225113768"
 
 # Replace with a unique name for your Azure Kubernetes Service cluster
-aks_cluster_name = "mihircluster225113768"
+aks_cluster_name = "mihirakscluster225113768"
 aks_dns_prefix   = "koalatech"
 
 aks_node_count   = 3
