@@ -1,4 +1,9 @@
-FROM python:3.12-slim
+FROM python:3.12.7-slim-bookworm
+
+# Patch OS-level packages to address CVEs flagged by Docker Scout
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

@@ -1,0 +1,71 @@
+name: 06 - Deploy Monitoring
+
+# Deploys/updates Prometheus + Grafana (kube-prometheus-stack) into the AKS
+# cluster's "monitoring" namespace. Runs after infrastructure is provisioned,
+# or manually to (re)validate the monitoring stack.
+
+on:
+  workflow_run:
+    workflows:
+      - "05 - Terraform Infrastructure"
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  monitoring:
+    name: Deploy Prometheus & Grafana
+    runs-on: ubuntu-latest
+
+    if: >
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ vars.AKS_RESOURCE_GROUP }} \
+            --name ${{ vars.AKS_CLUSTER_NAME }} \
+            --overwrite-existing
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Add Prometheus Community Helm repo
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+
+      - name: Create monitoring namespace
+        run: |
+          kubectl create namespace monitoring \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+      - name: Deploy kube-prometheus-stack (Prometheus + Grafana)
+        run: |
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --set grafana.service.type=LoadBalancer \
+            --set prometheus.service.type=ClusterIP \
+            --set grafana.adminPassword="${{ secrets.GRAFANA_ADMIN_PASSWORD }}" \
+            --wait --timeout 10m
+
+      - name: Verify Prometheus is collecting metrics
+        run: |
+          kubectl get pods -n monitoring
+          kubectl get servicemonitors -A
+          kubectl get svc -n monitoring
+
+      - name: Show Grafana access details
+        run: |
+          echo "Grafana external IP (may take a minute to appear on a fresh install):"
+          kubectl get svc monitoring-grafana -n monitoring
