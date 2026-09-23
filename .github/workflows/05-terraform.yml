@@ -1,10 +1,6 @@
 name: 05 - Terraform Infrastructure
 
-# First stage of the pipeline. Provisions/updates the Azure infrastructure
-# (Resource Group, ACR, Storage, AKS) that every later stage depends on.
-# Runs on every push to main so it's always the first thing to execute;
-# "01 - CI" and "06 - Deploy Monitoring" are both chained to start only
-# after this workflow succeeds (see their "workflow_run" triggers).
+# First stage of the pipeline.
 
 on:
   push:
