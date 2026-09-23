@@ -7,33 +7,58 @@ how to run it.
 
 | File | Change |
 |---|---|
-| `terraform/versions.tf` | Added an `azurerm` remote backend so Terraform state works from GitHub Actions runners |
-| `.github/workflows/05-terraform.yml` | **New.** Runs `terraform init/fmt/validate/plan/apply` whenever `terraform/**` changes |
-| `.github/workflows/06-monitoring.yml` | **New.** Installs/upgrades Prometheus + Grafana (`kube-prometheus-stack` Helm chart) into AKS |
-| `.github/workflows/01-ci.yml` | Added Docker Scout CVE scan + SARIF artifact upload after each image is built and pushed |
+| `.github/workflows/05-terraform.yml` | **New.** Runs first, on every push to `main` (or manual dispatch): `terraform init/fmt/validate/plan/apply`. Caches `terraform.tfstate` between runs via `actions/cache` (no remote backend needed) |
+| `.github/workflows/01-ci.yml` | Now triggers automatically via `workflow_run` only after `05 - Terraform Infrastructure` succeeds (instead of triggering on push directly). Added Docker Scout CVE scan + SARIF artifact upload after each image is built and pushed |
+| `.github/workflows/06-monitoring.yml` | **New.** Also triggers via `workflow_run` after `05` succeeds — installs/upgrades Prometheus + Grafana (`kube-prometheus-stack` Helm chart) into AKS |
 | `*-service/Dockerfile` (all 5 backend services) | Pinned base image to `python:3.12.7-slim-bookworm` + added `apt-get upgrade` to patch OS-level CVEs (remediation) |
 | `frontend/Dockerfile` | Pinned `nginx:1.27-alpine` → `nginx:1.27.3-alpine` (remediation) |
-| `terraform/terraform.tfstate*` | Removed from the project — state now lives remotely in Azure Storage |
 
-## One-time setup (do this before the first pipeline run)
+## Automatic pipeline sequence
 
-### 1. Migrate Terraform state to the remote backend
+Everything now runs in order from a single `git push` to `main` — no manual triggering required:
 
-From your own machine, with Azure CLI logged in and pointed at your subscription:
-
-```bash
-az storage container create \
-  --name tfstate \
-  --account-name mihirstorage225113768
-
-cd terraform
-terraform init -migrate-state
+```
+push to main
+      │
+      ▼
+05 - Terraform Infrastructure   (always runs first, provisions/updates Azure)
+      │
+      ├──────────────────────────────┐
+      ▼                               ▼
+01 - CI (test, build, Scout scan)   06 - Deploy Monitoring (Prometheus + Grafana)
+      │
+      ▼
+02 - Deploy to Staging
+      │
+      ▼
+03 - Test Staging
+      │
+      ▼
+04 - Deploy to Production   (still manual — intentional, per the original design:
+                              a tested build is promoted deliberately, not auto-deployed)
 ```
 
-Answer "yes" when asked to copy existing state to the new backend.
+`01` and `06` both start in parallel once `05` finishes successfully, since neither depends on the other. `02`/`03` were already chained this way in Week08 and needed no changes.
 
-> If you don't have a pre-existing local state (e.g. fresh clone), just run
-> `terraform init` — it will create fresh state in the remote container.
+## One-time setup (do this before the first push)
+
+### 1. Make sure `AZURE_CREDENTIALS` points at a working Service Principal with access
+
+```powershell
+az account show --query id --output tsv          # your subscription ID
+az ad sp credential reset --id <your-sp-appId>    # get a fresh clientSecret
+az role assignment create --assignee <your-sp-appId> --role Contributor --scope /subscriptions/<subscription-id>/resourceGroups/koalatech-week06-rg
+```
+
+Update the `AZURE_CREDENTIALS` GitHub secret with:
+```json
+{
+  "clientId": "<appId>",
+  "clientSecret": "<password from credential reset>",
+  "subscriptionId": "<subscription id>",
+  "tenantId": "<tenant>"
+}
+```
 
 ### 2. Add GitHub repository secrets
 
@@ -41,7 +66,7 @@ Repo → **Settings → Secrets and variables → Actions → Secrets**:
 
 | Secret | Value |
 |---|---|
-| `AZURE_CREDENTIALS` | *(already exists from Week08)* |
+| `AZURE_CREDENTIALS` | *(set above)* |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, etc. | *(already exist from Week08)* |
 | `DOCKERHUB_USERNAME` | Your Docker Hub username (free account is fine) |
 | `DOCKERHUB_TOKEN` | A Docker Hub access token (Docker Hub → Account Settings → Security → New Access Token) |
@@ -54,12 +79,19 @@ Repo → **Settings → Secrets and variables → Actions → Variables**:
 
 ## How to run the pipeline
 
+Just push. The whole chain runs automatically in the order shown in
+"Automatic pipeline sequence" above — no manual workflow triggering needed
+for `05`, `01`, `02`, `03` or `06`.
+
 1. **Commit and push everything** (see git commands below).
-2. **Run Terraform first:** Actions tab → `05 - Terraform Infrastructure` → **Run workflow** (or just push a change under `terraform/`). Confirm it finishes green and check the "Terraform Apply" step log for evidence.
-3. **Run monitoring:** Actions tab → `06 - Deploy Monitoring` → **Run workflow** (it also runs automatically after `05` succeeds). Wait for it to go green.
-4. **Trigger the app pipeline:** push any small code change (or re-run `01 - CI` manually). This builds images, runs Docker Scout on each, and (via the existing `workflow_run` chain) deploys to staging, smoke-tests it, and leaves production for manual promotion exactly as in Week08.
-5. **Check Docker Scout results:** open the `01 - CI` run → each `build-and-push` matrix job → "Docker Scout - CVE scan" step for the summary, and download the `scout-report-*` artifacts for the full SARIF files.
-6. **Promote to production** as before: Actions tab → `04 - Deploy to Production` → **Run workflow** → paste the tested commit SHA.
+2. **Watch it run:** Actions tab → you'll see `05 - Terraform Infrastructure` start immediately, then `01 - CI` and `06 - Deploy Monitoring` both start once `05` finishes, then `02 - Deploy to Staging` once `01` finishes, then `03 - Test Staging` once `02` finishes.
+3. **Check Docker Scout results:** open the `01 - CI` run → each `build-and-push` matrix job → "Docker Scout - CVE scan" step for the summary, and download the `scout-report-*` artifacts for the full SARIF files.
+4. **Promote to production** manually, once staging looks good: Actions tab → `04 - Deploy to Production` → **Run workflow** → paste the tested commit SHA (visible in the `02`/`03` run logs, or just use the SHA of the commit you pushed).
+
+> First run note: the very first time you push after this change, `05` will
+> create everything from scratch (resource group, ACR, storage account, AKS)
+> since state was reset — this can take 10–15 minutes, mostly for AKS.
+> Everything downstream waits for it automatically, so you can just let it run.
 
 ## Verifying each component (for your submission evidence)
 

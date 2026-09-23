@@ -1,11 +1,16 @@
 name: 01 - CI
-# Trigger CI/CD pipeline for Task 8.1P - Mihir
+# Second stage of the pipeline: waits for "05 - Terraform Infrastructure" to
+# succeed (so ACR/AKS definitely exist), then tests, builds, scans and
+# pushes images. "02 - Deploy to Staging" is chained after this in turn.
 on:
-  # Trigger the workflow on push to main branch
-  push:
+  workflow_run:
+    workflows:
+      - "05 - Terraform Infrastructure"
+    types:
+      - completed
     branches:
       - main
-  
+
   # Manual trigger for the workflow
   workflow_dispatch:
 
@@ -18,6 +23,10 @@ jobs:
   backend-test:
     name: Test ${{ matrix.service }}
     runs-on: ubuntu-latest
+
+    if: >
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.conclusion == 'success' }}
 
     strategy:
       fail-fast: false
@@ -84,6 +93,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -113,9 +124,6 @@ jobs:
     needs:
       - backend-test
 
-    # Build and push when code is pushed to main or manually triggered
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-
     strategy:
       fail-fast: false
 
@@ -143,6 +151,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -157,13 +167,13 @@ jobs:
         run: |
           docker build \
             --platform linux/amd64 \
-            -t ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image }}:${{ github.sha }} \
+            -t ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image }}:${{ github.event.workflow_run.head_sha || github.sha }} \
             ./${{ matrix.service }}
 
       - name: Push Docker image with commit SHA
         run: |
           docker push \
-            ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image }}:${{ github.event.workflow_run.head_sha || github.sha }}
 
       # =========================================================
       # Container Security Scanning (Task 10.2D)
@@ -179,7 +189,7 @@ jobs:
         uses: docker/scout-action@v1
         with:
           command: cves
-          image: ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image }}:${{ github.sha }}
+          image: ${{ vars.ACR_LOGIN_SERVER }}/${{ matrix.image }}:${{ github.event.workflow_run.head_sha || github.sha }}
           only-severities: critical,high
           sarif-file: scout-${{ matrix.image }}.sarif
           summary: true

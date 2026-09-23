@@ -1,15 +1,15 @@
 name: 05 - Terraform Infrastructure
 
-# Provisions/updates the Azure infrastructure (Resource Group, ACR, Storage,
-# AKS) that the rest of the pipeline depends on. Runs whenever Terraform
-# files change, or manually.
+# First stage of the pipeline. Provisions/updates the Azure infrastructure
+# (Resource Group, ACR, Storage, AKS) that every later stage depends on.
+# Runs on every push to main so it's always the first thing to execute;
+# "01 - CI" and "06 - Deploy Monitoring" are both chained to start only
+# after this workflow succeeds (see their "workflow_run" triggers).
 
 on:
   push:
     branches:
       - main
-    paths:
-      - "terraform/**"
   workflow_dispatch:
 
 jobs:
@@ -21,23 +21,20 @@ jobs:
       run:
         working-directory: terraform
 
-    env:
-      ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
-      ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
-      ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
-      ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
-      - name: Cache Terraform state
+
+      # Local state is cached between workflow runs so re-runs know what
+      # already exists in Azure instead of trying to recreate it.
+      - name: Restore cached Terraform state
         uses: actions/cache@v4
         with:
           path: terraform/terraform.tfstate
           key: tfstate-${{ github.repository }}
           restore-keys: |
             tfstate-${{ github.repository }}
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -60,9 +57,19 @@ jobs:
 
       - name: Terraform Plan
         run: terraform plan -out=tfplan
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
 
       - name: Show Terraform outputs
         run: terraform output
